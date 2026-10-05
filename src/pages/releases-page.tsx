@@ -15,12 +15,15 @@ import {
 import { Textarea } from '../components/ui/textarea';
 import { formatDateTime } from '../lib/utils';
 import { validateForRelease } from '../models/contract';
+import { buildReconciliationIssues } from '../models/reconciliation';
 import { useContracts, useFreezeVersion } from '../services/contract-queries';
+import { useReconciliationStore } from '../services/reconciliation-queries';
 import { useReviewStore } from '../store/review-store';
 
 export function ReleasesPage() {
   const contracts = useContracts();
   const freezeVersion = useFreezeVersion();
+  const reconciliation = useReconciliationStore();
   const selectedContractId = useReviewStore((state) => state.selectedContractId);
   const setSelectedContract = useReviewStore((state) => state.setSelectedContract);
   const [version, setVersion] = useState('');
@@ -29,8 +32,18 @@ export function ReleasesPage() {
   const selectedContract = (contracts.data ?? []).find(
     (contract) => contract.id === selectedContractId,
   );
-  const selectedIssues = selectedContract ? validateForRelease(selectedContract) : [];
+  const selectedIssues = useMemo(() => {
+    if (!selectedContract) return [];
+    const snapshots = reconciliation.data?.store.snapshots ?? [];
+    return [
+      ...validateForRelease(selectedContract),
+      ...buildReconciliationIssues(selectedContract, snapshots),
+    ];
+  }, [selectedContract, reconciliation.data]);
   const blockers = selectedIssues.filter((issue) => issue.severity === 'blocker').length;
+  const reconciliationBlockers = selectedIssues.filter(
+    (issue) => issue.severity === 'blocker' && issue.id.startsWith('recon-'),
+  ).length;
 
   const versions = useMemo(
     () =>
@@ -176,6 +189,18 @@ export function ReleasesPage() {
                         {blockers
                           ? '先在详细页补齐改变评审、影响说明和迁移方案。'
                           : '可以冻结正式版本，历史工作副本仍保留。'}
+                        {reconciliationBlockers > 0 && (
+                          <>
+                            {' '}
+                            <Link
+                              to="/reconciliation"
+                              className="font-medium text-sky-800 hover:underline"
+                            >
+                              {reconciliationBlockers} 项来自上线对账，前往核实调用方流量
+                            </Link>
+                            。
+                          </>
+                        )}
                       </p>
                     </div>
                   </div>

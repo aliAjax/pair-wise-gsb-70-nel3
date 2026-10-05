@@ -1,9 +1,10 @@
 import { seedContracts } from '../data/seed';
-import type {
-  ApiContract,
-  ContractChange,
-  ContractVersion,
-  ReviewState,
+import {
+  changeFingerprint,
+  type ApiContract,
+  type ContractChange,
+  type ContractVersion,
+  type ReviewState,
 } from '../models/contract';
 import { stableChecksum, formatDateTime } from '../lib/utils';
 
@@ -138,13 +139,15 @@ export async function addExemption(
   if (!contract) {
     throw new Error('契约不存在');
   }
+  const change = contract.changes.find((item) => item.id === changeId);
   const exemption = {
     id: `ex-${Date.now()}`,
     changeId,
-    scope: contract.changes.find((item) => item.id === changeId)?.path ?? '未指定',
+    scope: change?.path ?? '未指定',
     reason,
     approvedBy: '当前评审人',
     expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
+    diffFingerprint: change ? changeFingerprint(change) : undefined,
   };
   const updated: ApiContract = {
     ...contract,

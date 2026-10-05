@@ -38,6 +38,7 @@ import {
   type ReviewState,
   validateForRelease,
 } from '../models/contract';
+import { buildReconciliationIssues } from '../models/reconciliation';
 import {
   buildChangeReport,
   diffVersionSummary,
@@ -51,6 +52,7 @@ import {
   useSaveContract,
   useUpdateOpenApi,
 } from '../services/contract-queries';
+import { useReconciliationStore } from '../services/reconciliation-queries';
 import { useReviewStore } from '../store/review-store';
 
 export function ContractDetailPage() {
@@ -69,9 +71,19 @@ export function ContractDetailPage() {
   const [selectedVersionId, setSelectedVersionId] = useState('');
 
   const contract = contractQuery.data;
+  const reconciliation = useReconciliationStore();
   const issues = useMemo(
-    () => (contract ? validateForRelease(contract) : []),
-    [contract],
+    () =>
+      contract
+        ? [
+            ...validateForRelease(contract),
+            ...buildReconciliationIssues(
+              contract,
+              reconciliation.data?.store.snapshots ?? [],
+            ),
+          ]
+        : [],
+    [contract, reconciliation.data],
   );
   const blockers = issues.filter((issue) => issue.severity === 'blocker').length;
   const warnings = issues.filter((issue) => issue.severity === 'warning').length;

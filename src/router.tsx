@@ -7,6 +7,7 @@ import {
 import { AppShell } from './components/layout/app-shell';
 import { ContractDetailPage } from './pages/contract-detail-page';
 import { DashboardPage } from './pages/dashboard-page';
+import { ReconciliationPage } from './pages/reconciliation-page';
 import { ReleasesPage } from './pages/releases-page';
 import { ReportsPage } from './pages/reports-page';
 import { ReviewQueuePage } from './pages/review-queue-page';
@@ -48,6 +49,12 @@ const releasesRoute = createRoute({
   component: ReleasesPage,
 });
 
+const reconciliationRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/reconciliation',
+  component: ReconciliationPage,
+});
+
 const reportsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/reports',
@@ -59,6 +66,7 @@ const routeTree = rootRoute.addChildren([
   contractDetailRoute,
   reviewRoute,
   releasesRoute,
+  reconciliationRoute,
   reportsRoute,
 ]);
 

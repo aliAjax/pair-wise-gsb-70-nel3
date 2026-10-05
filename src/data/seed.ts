@@ -1,5 +1,5 @@
 import type { ApiContract, ChangeKind } from '../models/contract';
-import { classifyChange } from '../models/contract';
+import { changeFingerprint, classifyChange } from '../models/contract';
 
 function openApi(
   title: string,
@@ -112,6 +112,37 @@ const userOpenApi = openApi('用户权限 API', '1.14.0', [
   },
 ]);
 
+const orderCancelRequired = change(
+  'chg-order-2',
+  '/orders/{orderId}/cancel',
+  'POST',
+  'optionality_changed',
+  'requestId 为可选字段',
+  'requestId 变为必填字段',
+  {
+    impactStatement: '取消订单客户端 12 个，其中 3 个生产调用方尚未升级。',
+    migrationPlan: '发布前完成三个调用方灰度升级，兼容层保留 30 天。',
+    reviewState: 'pending',
+  },
+);
+
+const paymentRemoveBatch = change(
+  'chg-pay-1',
+  '/refunds',
+  'POST',
+  'field_removed',
+  '响应字段 settlementBatchId',
+  '移除 settlementBatchId',
+  {
+    impactStatement: '财务对账服务仍使用该字段匹配批次。',
+    migrationPlan: '先由对账服务切换 paymentId 匹配，稳定两周后删除字段。',
+    reviewState: 'returned',
+    reviewer: '韩度',
+    reviewComment: '迁移方案未包含历史数据核对，退回补充。',
+    reviewedAt: '2026-09-28T10:40:00.000Z',
+  },
+);
+
 export const seedContracts: ApiContract[] = [
   {
     id: 'contract-order',
@@ -138,19 +169,7 @@ export const seedContracts: ApiContract[] = [
           reviewedAt: '2026-09-29T02:10:00.000Z',
         },
       ),
-      change(
-        'chg-order-2',
-        '/orders/{orderId}/cancel',
-        'POST',
-        'optionality_changed',
-        'requestId 为可选字段',
-        'requestId 变为必填字段',
-        {
-          impactStatement: '取消订单客户端 12 个，其中 3 个生产调用方尚未升级。',
-          migrationPlan: '发布前完成三个调用方灰度升级，兼容层保留 30 天。',
-          reviewState: 'pending',
-        },
-      ),
+      orderCancelRequired,
       change(
         'chg-order-3',
         '/orders/{orderId}',
@@ -183,7 +202,7 @@ export const seedContracts: ApiContract[] = [
         name: '客服工作台',
         owner: '服务体验组',
         environment: '生产',
-        clientVersion: '3.9.0',
+        clientVersion: '3.9.5',
         requestsPerDay: 680000,
         contact: 'cs-platform@example.com',
       },
@@ -205,6 +224,7 @@ export const seedContracts: ApiContract[] = [
         reason: '三个遗留调用方需要分阶段升级，兼容层临时允许缺失。',
         approvedBy: '付航',
         expiresAt: '2026-10-31',
+        diffFingerprint: changeFingerprint(orderCancelRequired),
       },
     ],
     versions: [
@@ -231,22 +251,7 @@ export const seedContracts: ApiContract[] = [
     updatedAt: '2026-09-28T10:40:00.000Z',
     openapi: paymentOpenApi,
     changes: [
-      change(
-        'chg-pay-1',
-        '/refunds',
-        'POST',
-        'field_removed',
-        '响应字段 settlementBatchId',
-        '移除 settlementBatchId',
-        {
-          impactStatement: '财务对账服务仍使用该字段匹配批次。',
-          migrationPlan: '先由对账服务切换 paymentId 匹配，稳定两周后删除字段。',
-          reviewState: 'returned',
-          reviewer: '韩度',
-          reviewComment: '迁移方案未包含历史数据核对，退回补充。',
-          reviewedAt: '2026-09-28T10:40:00.000Z',
-        },
-      ),
+      paymentRemoveBatch,
       change(
         'chg-pay-2',
         '/payments/{paymentId}',
@@ -284,7 +289,26 @@ export const seedContracts: ApiContract[] = [
         contact: 'pay-ops@example.com',
       },
     ],
-    exemptions: [],
+    exemptions: [
+      {
+        id: 'ex-pay-1',
+        changeId: 'chg-pay-1',
+        scope: '退款响应 settlementBatchId 兼容层',
+        reason: '财务对账切换期间由兼容层回填批次号。',
+        approvedBy: '韩度',
+        expiresAt: '2026-09-30',
+        diffFingerprint: changeFingerprint(paymentRemoveBatch),
+      },
+      {
+        id: 'ex-pay-2',
+        changeId: 'chg-pay-1',
+        scope: '报表平台旧版解析兼容',
+        reason: '遗留报表平台依赖批次号字段，申请临时保留。',
+        approvedBy: '付航',
+        expiresAt: '2026-12-31',
+        diffFingerprint: 'stale-fingerprint',
+      },
+    ],
     versions: [
       {
         id: 'ver-pay-410',

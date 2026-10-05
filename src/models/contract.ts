@@ -1,3 +1,5 @@
+import { stableChecksum } from '../lib/utils';
+
 export type ContractStatus = 'draft' | 'review' | 'ready' | 'released' | 'frozen';
 export type ChangeKind =
   | 'field_added'
@@ -43,6 +45,8 @@ export interface Exemption {
   reason: string;
   approvedBy: string;
   expiresAt: string;
+  /** 登记豁免时变更差异的指纹，差异变化后豁免自动失效 */
+  diffFingerprint?: string;
 }
 
 export interface ContractVersion {
@@ -161,7 +165,47 @@ export function classifyChange(input: {
   }
 }
 
-export function validateForRelease(contract: ApiContract): ReleaseIssue[] {
+export function dateKey(value: Date): string {
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, '0');
+  const day = String(value.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+export function changeFingerprint(
+  change: Pick<ContractChange, 'kind' | 'method' | 'path' | 'before' | 'after'>,
+): string {
+  return stableChecksum(
+    [change.kind, change.method, change.path, change.before, change.after].join('|'),
+  );
+}
+
+export interface ExemptionValidity {
+  valid: boolean;
+  reason: string;
+}
+
+export function evaluateExemption(
+  exemption: Exemption,
+  change: ContractChange | undefined,
+  now: Date = new Date(),
+): ExemptionValidity {
+  if (!change) {
+    return { valid: false, reason: '对应变更已删除，豁免失去锚点。' };
+  }
+  if (exemption.expiresAt < dateKey(now)) {
+    return { valid: false, reason: `豁免已于 ${exemption.expiresAt} 过期。` };
+  }
+  if (!exemption.diffFingerprint) {
+    return { valid: false, reason: '缺少差异指纹，无法确认豁免覆盖当前差异。' };
+  }
+  if (exemption.diffFingerprint !== changeFingerprint(change)) {
+    return { valid: false, reason: '变更差异已变化，登记时的指纹不再匹配。' };
+  }
+  return { valid: true, reason: `有效至 ${exemption.expiresAt}。` };
+}
+
+export function validateForRelease(contract: ApiContract, now: Date = new Date()): ReleaseIssue[] {
   const issues: ReleaseIssue[] = [];
   const pending = contract.changes.filter((change) => change.reviewState === 'pending');
   pending.forEach((change) => {
@@ -205,7 +249,9 @@ export function validateForRelease(contract: ApiContract): ReleaseIssue[] {
       (change) =>
         change.compatibility === 'breaking' &&
         change.reviewState === 'accepted' &&
-        !contract.exemptions.some((item) => item.changeId === change.id),
+        !contract.exemptions.some(
+          (item) => item.changeId === change.id && evaluateExemption(item, change, now).valid,
+        ),
     )
     .forEach((change) => {
       issues.push({
