@@ -1,5 +1,6 @@
 import type { ApiContract, ChangeKind } from '../models/contract';
-import { classifyChange } from '../models/contract';
+import { classifyChange, diffFingerprint } from '../models/contract';
+import type { TrafficSnapshot } from '../models/reconciliation';
 
 function openApi(
   title: string,
@@ -112,6 +113,37 @@ const userOpenApi = openApi('用户权限 API', '1.14.0', [
   },
 ]);
 
+const orderCancelChange = change(
+  'chg-order-2',
+  '/orders/{orderId}/cancel',
+  'POST',
+  'optionality_changed',
+  'requestId 为可选字段',
+  'requestId 变为必填字段',
+  {
+    impactStatement: '取消订单客户端 12 个，其中 3 个生产调用方尚未升级。',
+    migrationPlan: '发布前完成三个调用方灰度升级，兼容层保留 30 天。',
+    reviewState: 'pending',
+  },
+);
+
+const paymentRefundChange = change(
+  'chg-pay-1',
+  '/refunds',
+  'POST',
+  'field_removed',
+  '响应字段 settlementBatchId',
+  '移除 settlementBatchId',
+  {
+    impactStatement: '财务对账服务仍使用该字段匹配批次。',
+    migrationPlan: '先由对账服务切换 paymentId 匹配，稳定两周后删除字段。',
+    reviewState: 'returned',
+    reviewer: '韩度',
+    reviewComment: '迁移方案未包含历史数据核对，退回补充。',
+    reviewedAt: '2026-09-28T10:40:00.000Z',
+  },
+);
+
 export const seedContracts: ApiContract[] = [
   {
     id: 'contract-order',
@@ -138,19 +170,7 @@ export const seedContracts: ApiContract[] = [
           reviewedAt: '2026-09-29T02:10:00.000Z',
         },
       ),
-      change(
-        'chg-order-2',
-        '/orders/{orderId}/cancel',
-        'POST',
-        'optionality_changed',
-        'requestId 为可选字段',
-        'requestId 变为必填字段',
-        {
-          impactStatement: '取消订单客户端 12 个，其中 3 个生产调用方尚未升级。',
-          migrationPlan: '发布前完成三个调用方灰度升级，兼容层保留 30 天。',
-          reviewState: 'pending',
-        },
-      ),
+      orderCancelChange,
       change(
         'chg-order-3',
         '/orders/{orderId}',
@@ -205,6 +225,7 @@ export const seedContracts: ApiContract[] = [
         reason: '三个遗留调用方需要分阶段升级，兼容层临时允许缺失。',
         approvedBy: '付航',
         expiresAt: '2026-10-31',
+        diffFingerprint: diffFingerprint(orderCancelChange),
       },
     ],
     versions: [
@@ -231,22 +252,7 @@ export const seedContracts: ApiContract[] = [
     updatedAt: '2026-09-28T10:40:00.000Z',
     openapi: paymentOpenApi,
     changes: [
-      change(
-        'chg-pay-1',
-        '/refunds',
-        'POST',
-        'field_removed',
-        '响应字段 settlementBatchId',
-        '移除 settlementBatchId',
-        {
-          impactStatement: '财务对账服务仍使用该字段匹配批次。',
-          migrationPlan: '先由对账服务切换 paymentId 匹配，稳定两周后删除字段。',
-          reviewState: 'returned',
-          reviewer: '韩度',
-          reviewComment: '迁移方案未包含历史数据核对，退回补充。',
-          reviewedAt: '2026-09-28T10:40:00.000Z',
-        },
-      ),
+      paymentRefundChange,
       change(
         'chg-pay-2',
         '/payments/{paymentId}',
@@ -284,7 +290,32 @@ export const seedContracts: ApiContract[] = [
         contact: 'pay-ops@example.com',
       },
     ],
-    exemptions: [],
+    exemptions: [
+      {
+        id: 'ex-pay-1',
+        changeId: 'chg-pay-1',
+        scope: '财务对账（生产）',
+        reason: '兼容层已上线，等待对账服务切换匹配键。',
+        approvedBy: '韩度',
+        expiresAt: '2026-12-31',
+        callerId: 'consumer-finance',
+        // 登记后差异被修订，指纹不再匹配，豁免自动失效
+        diffFingerprint: diffFingerprint({
+          ...paymentRefundChange,
+          after: '移除 settlementBatchId（旧方案）',
+        }),
+      },
+      {
+        id: 'ex-pay-2',
+        changeId: 'chg-pay-1',
+        scope: '支付运营台（生产）',
+        reason: '运营台排期在 Q4 升级，期间由兼容层兜底。',
+        approvedBy: '韩度',
+        expiresAt: '2026-09-30',
+        callerId: 'consumer-pay-ops',
+        diffFingerprint: diffFingerprint(paymentRefundChange),
+      },
+    ],
     versions: [
       {
         id: 'ver-pay-410',
@@ -337,5 +368,92 @@ export const seedContracts: ApiContract[] = [
     ],
     exemptions: [],
     versions: [],
+  },
+];
+
+/** 网关上报的调用方流量快照种子：同一调用方同一版本只认最新一条 */
+export const seedTrafficSnapshots: TrafficSnapshot[] = [
+  // 订单履约：订单中心 4.6.2 有两条快照，去重后只保留 09-30 的最新一条
+  {
+    id: 'snap-order-app-1',
+    contractId: 'contract-order',
+    callerId: 'consumer-app',
+    callerName: '订单中心',
+    clientVersion: '4.6.2',
+    environment: '生产',
+    requestsPerDay: 4800000,
+    capturedAt: '2026-09-29T08:00:00.000Z',
+  },
+  {
+    id: 'snap-order-app-2',
+    contractId: 'contract-order',
+    callerId: 'consumer-app',
+    callerName: '订单中心',
+    clientVersion: '4.6.2',
+    environment: '生产',
+    requestsPerDay: 4835000,
+    capturedAt: '2026-09-30T08:00:00.000Z',
+  },
+  {
+    id: 'snap-order-cs-1',
+    contractId: 'contract-order',
+    callerId: 'consumer-cs',
+    callerName: '客服工作台',
+    clientVersion: '3.9.0',
+    environment: '生产',
+    requestsPerDay: 680000,
+    capturedAt: '2026-09-30T08:00:00.000Z',
+  },
+  {
+    id: 'snap-order-bi-1',
+    contractId: 'contract-order',
+    callerId: 'consumer-bi',
+    callerName: '经营分析',
+    clientVersion: '2.1.5',
+    environment: '预发',
+    requestsPerDay: 220000,
+    capturedAt: '2026-09-30T08:00:00.000Z',
+  },
+  // 支付清算：包含一个未登记、但网关仍在生产看到的旧客户端
+  {
+    id: 'snap-pay-finance-1',
+    contractId: 'contract-payment',
+    callerId: 'consumer-finance',
+    callerName: '财务对账',
+    clientVersion: '5.2.0',
+    environment: '生产',
+    requestsPerDay: 1100000,
+    capturedAt: '2026-09-30T08:00:00.000Z',
+  },
+  {
+    id: 'snap-pay-ops-1',
+    contractId: 'contract-payment',
+    callerId: 'consumer-pay-ops',
+    callerName: '支付运营台',
+    clientVersion: '4.1.8',
+    environment: '生产',
+    requestsPerDay: 320000,
+    capturedAt: '2026-09-30T08:00:00.000Z',
+  },
+  {
+    id: 'snap-pay-legacy-1',
+    contractId: 'contract-payment',
+    callerId: 'caller-legacy-report',
+    callerName: '财务报表旧版',
+    clientVersion: '2.0.1',
+    environment: '生产',
+    requestsPerDay: 95000,
+    capturedAt: '2026-09-30T08:00:00.000Z',
+  },
+  // 用户权限
+  {
+    id: 'snap-user-admin-1',
+    contractId: 'contract-user',
+    callerId: 'consumer-admin',
+    callerName: '权限管理台',
+    clientVersion: '1.12.3',
+    environment: '生产',
+    requestsPerDay: 180000,
+    capturedAt: '2026-09-30T08:00:00.000Z',
   },
 ];

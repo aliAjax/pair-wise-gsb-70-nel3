@@ -38,6 +38,7 @@ import {
   type ReviewState,
   validateForRelease,
 } from '../models/contract';
+import { reconciliationGateIssues } from '../models/reconciliation';
 import {
   buildChangeReport,
   diffVersionSummary,
@@ -51,6 +52,7 @@ import {
   useSaveContract,
   useUpdateOpenApi,
 } from '../services/contract-queries';
+import { useReconciliation } from '../services/reconciliation-queries';
 import { useReviewStore } from '../store/review-store';
 
 export function ContractDetailPage() {
@@ -69,10 +71,15 @@ export function ContractDetailPage() {
   const [selectedVersionId, setSelectedVersionId] = useState('');
 
   const contract = contractQuery.data;
-  const issues = useMemo(
-    () => (contract ? validateForRelease(contract) : []),
-    [contract],
-  );
+  const reconQuery = useReconciliation(contractId);
+  const recon = reconQuery.data;
+  const reconLoading = reconQuery.isLoading;
+  const issues = useMemo(() => {
+    if (!contract) return [];
+    const reviewIssues = validateForRelease(contract);
+    const reconIssues = reconLoading ? [] : reconciliationGateIssues(contract, recon);
+    return [...reviewIssues, ...reconIssues];
+  }, [contract, recon, reconLoading]);
   const blockers = issues.filter((issue) => issue.severity === 'blocker').length;
   const warnings = issues.filter((issue) => issue.severity === 'warning').length;
   const acceptedCount = contract?.changes.filter((change) => change.reviewState !== 'pending').length ?? 0;

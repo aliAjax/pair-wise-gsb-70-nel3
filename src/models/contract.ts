@@ -1,3 +1,5 @@
+import { stableChecksum } from '../lib/utils';
+
 export type ContractStatus = 'draft' | 'review' | 'ready' | 'released' | 'frozen';
 export type ChangeKind =
   | 'field_added'
@@ -43,6 +45,10 @@ export interface Exemption {
   reason: string;
   approvedBy: string;
   expiresAt: string;
+  /** 豁免覆盖的调用方；缺省表示覆盖全部调用方 */
+  callerId?: string;
+  /** 登记时变更差异的指纹，差异变化后豁免自动失效 */
+  diffFingerprint?: string;
 }
 
 export interface ContractVersion {
@@ -101,6 +107,32 @@ export const REVIEW_STATE_LABELS: Record<ReviewState, string> = {
   returned: '已退回',
   exemption: '兼容层豁免',
 };
+
+export type ExemptionValidity = 'valid' | 'expired' | 'diff_changed' | 'unbound';
+
+export const EXEMPTION_VALIDITY_LABELS: Record<ExemptionValidity, string> = {
+  valid: '有效',
+  expired: '已过期',
+  diff_changed: '差异已变化',
+  unbound: '未绑定差异',
+};
+
+export function diffFingerprint(change: ContractChange): string {
+  return stableChecksum(
+    [change.id, change.kind, change.method, change.path, change.before, change.after].join('|'),
+  );
+}
+
+export function exemptionValidity(
+  exemption: Exemption,
+  change: ContractChange,
+  now: Date = new Date(),
+): ExemptionValidity {
+  if (!exemption.diffFingerprint) return 'unbound';
+  if (exemption.diffFingerprint !== diffFingerprint(change)) return 'diff_changed';
+  if (exemption.expiresAt < now.toISOString().slice(0, 10)) return 'expired';
+  return 'valid';
+}
 
 export const CONTRACT_STATUS_LABELS: Record<ContractStatus, string> = {
   draft: '草稿',
@@ -205,14 +237,16 @@ export function validateForRelease(contract: ApiContract): ReleaseIssue[] {
       (change) =>
         change.compatibility === 'breaking' &&
         change.reviewState === 'accepted' &&
-        !contract.exemptions.some((item) => item.changeId === change.id),
+        !contract.exemptions.some(
+          (item) => item.changeId === change.id && exemptionValidity(item, change) === 'valid',
+        ),
     )
     .forEach((change) => {
       issues.push({
         id: `breaking-${change.id}`,
         severity: 'warning',
-        title: '不兼容变更已接受但未登记豁免',
-        detail: `${change.path} 需要记录兼容层的范围、原因和到期时间。`,
+        title: '不兼容变更已接受但无有效豁免',
+        detail: `${change.path} 需要记录兼容层的范围、原因和到期时间；豁免过期或差异变化后需重新登记。`,
         changeId: change.id,
       });
     });

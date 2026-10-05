@@ -1,5 +1,5 @@
 import { Link } from '@tanstack/react-router';
-import { Archive, CheckCircle2, LockKeyhole, PackageCheck, TriangleAlert } from 'lucide-react';
+import { Archive, CheckCircle2, LockKeyhole, PackageCheck, Scale, TriangleAlert } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
@@ -15,7 +15,9 @@ import {
 import { Textarea } from '../components/ui/textarea';
 import { formatDateTime } from '../lib/utils';
 import { validateForRelease } from '../models/contract';
+import { reconciliationGateIssues } from '../models/reconciliation';
 import { useContracts, useFreezeVersion } from '../services/contract-queries';
+import { useReconciliation } from '../services/reconciliation-queries';
 import { useReviewStore } from '../store/review-store';
 
 export function ReleasesPage() {
@@ -29,8 +31,17 @@ export function ReleasesPage() {
   const selectedContract = (contracts.data ?? []).find(
     (contract) => contract.id === selectedContractId,
   );
+  const reconQuery = useReconciliation(selectedContractId);
+  const recon = reconQuery.data;
+  const reconLoading = reconQuery.isLoading;
   const selectedIssues = selectedContract ? validateForRelease(selectedContract) : [];
-  const blockers = selectedIssues.filter((issue) => issue.severity === 'blocker').length;
+  const reconIssues =
+    selectedContract && !reconLoading
+      ? reconciliationGateIssues(selectedContract, recon)
+      : [];
+  const blockers =
+    selectedIssues.filter((issue) => issue.severity === 'blocker').length +
+    reconIssues.filter((issue) => issue.severity === 'blocker').length;
 
   const versions = useMemo(
     () =>
@@ -179,6 +190,30 @@ export function ReleasesPage() {
                       </p>
                     </div>
                   </div>
+
+                  {reconIssues.length > 0 && (
+                    <div className="mt-3 rounded-md border border-red-200 bg-red-50 p-3">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="flex items-center gap-1.5 text-xs font-semibold text-red-900">
+                          <Scale className="h-3.5 w-3.5" />
+                          上线对账
+                        </span>
+                        <Link
+                          to="/reconciliation"
+                          className="text-xs font-medium text-red-900 underline"
+                        >
+                          前往对账
+                        </Link>
+                      </div>
+                      <ul className="mt-2 space-y-1.5">
+                        {reconIssues.map((issue) => (
+                          <li key={issue.id} className="text-xs leading-5 text-red-900">
+                            <strong>{issue.title}</strong>：{issue.detail}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
 
                   <label className="mt-4 block text-xs font-medium text-slate-700">新版本号</label>
                   <Input
